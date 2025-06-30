@@ -162,7 +162,7 @@ def generate_html_timetable(matrix, classrooms, data, output_file='timetable.htm
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    print(f"✅ HTML جدول الحصص تم إنشاؤه: {output_file}")
+    print(f"✅ HTML timetable {output_file}")
 
 
 
