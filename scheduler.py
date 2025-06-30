@@ -1,62 +1,50 @@
 import random
 from operator import itemgetter
-from utils import load_data, show_timetable, set_up, show_statistics, write_solution_to_file
+from utils import load_txt_data,generate_html_timetable, set_up, show_statistics, write_solution_to_file
 from costs import check_hard_constraints, hard_constraints_cost, empty_space_groups_cost, empty_space_teachers_cost, \
     free_hour
+from costs import get_empty_space_data
+
 import copy
 import math
 
 
 def initial_population(data, matrix, free, filled, groups_empty_space, teachers_empty_space, subjects_order):
-    """
-    Sets up initial timetable for given classes by inserting in free fields such that every class is in its fitting
-    classroom.
-    """
     classes = data.classes
 
     for index, classs in classes.items():
-        ind = 0
-        # ind = random.randrange(len(free) - int(classs.duration))
-        while True:
-            start_field = free[ind]
+        random.shuffle(free)  # توزيع عادل على كل الأيام
 
-            # check if class won't start one day and end on the next
+        for start_field in free:
             start_time = start_field[0]
             end_time = start_time + int(classs.duration) - 1
-            if start_time % 12 > end_time % 12:
-                ind += 1
+
+            # لا تسمح بتجاوز حدود اليوم
+            if start_time % 9 > end_time % 9:
                 continue
 
-            found = True
-            # check if whole block for the class is free
-            for i in range(1, int(classs.duration)):
-                field = (i + start_time, start_field[1])
-                if field not in free:
-                    found = False
-                    ind += 1
-                    break
-
-            # secure that classroom fits
+            # تحقق أن القاعة من القاعات المسموحة
             if start_field[1] not in classs.classrooms:
-                ind += 1
                 continue
 
-            if found:
-                for group_index in classs.groups:
-                    # add order of the subjects for group
-                    insert_order(subjects_order, classs.subject, group_index, classs.type, start_time)
-                    # add times of the class for group
-                    for i in range(int(classs.duration)):
-                        groups_empty_space[group_index].append(i + start_time)
+            # تحقق أن كل المدة الزمنية متاحة
+            if any((start_time + i, start_field[1]) not in free for i in range(classs.duration)):
+                continue
 
+            # ✅ لو وصلنا هنا، يعني نقدر نحجزها
+            for group_index in classs.groups:
+                insert_order(subjects_order, classs.subject, group_index, classs.type, start_time)
                 for i in range(int(classs.duration)):
-                    filled.setdefault(index, []).append((i + start_time, start_field[1]))        # add to filled
-                    free.remove((i + start_time, start_field[1]))                                # remove from free
-                    # add times of the class for teachers
-                    teachers_empty_space[classs.teacher].append(i + start_time)
-                break
+                    groups_empty_space[group_index].append(i + start_time)
 
-    # fill the matrix
+            for i in range(int(classs.duration)):
+                filled.setdefault(index, []).append((i + start_time, start_field[1]))
+                free.remove((i + start_time, start_field[1]))
+                teachers_empty_space[classs.teacher].append(i + start_time)
+
+            break  # خلاص حجزنا، انتقل للكلاس اللي بعده
+
+    # تحديث المصفوفة
     for index, fields_list in filled.items():
         for field in fields_list:
             matrix[field[0]][field[1]] = index
@@ -137,7 +125,7 @@ def mutate_ideal_spot(matrix, data, ind_class, free, filled, groups_empty_space,
         # check if class won't start one day and end on the next
         start_time = start_field[0]
         end_time = start_time + int(classs.duration) - 1
-        if start_time % 12 > end_time % 12:
+        if start_time % 9 > end_time % 9:
             ind += 1
             continue
 
@@ -204,9 +192,10 @@ def evolutionary_algorithm(matrix, data, free, filled, groups_empty_space, teach
             # check if optimal solution is found
             loss_before, cost_classes, cost_teachers, cost_classrooms, cost_groups = hard_constraints_cost(matrix, data)
             if loss_before == 0 and check_hard_constraints(matrix, data) == 0:
+                loss_after = loss_before
                 print('Found optimal solution: \n')
-                show_timetable(matrix)
                 break
+
 
             # sort classes by their loss, [(loss, class index)]
             costs_list = sorted(cost_classes.items(), key=itemgetter(1), reverse=True)
@@ -299,43 +288,165 @@ def simulated_hardening(matrix, data, free, filled, groups_empty_space, teachers
             print('Iteration: {:4d} | Average cost: {:0.8f}'.format(i, curr_cost))
 
     print('TIMETABLE AFTER HARDENING')
-    show_timetable(matrix)
+    
     print('STATISTICS AFTER HARDENING')
     show_statistics(matrix, data, subjects_order, groups_empty_space, teachers_empty_space)
     write_solution_to_file(matrix, data, filled, file, groups_empty_space, teachers_empty_space, subjects_order)
+def cost_function(matrix, data):
+    from costs import empty_space_groups_cost, empty_space_teachers_cost, subjects_order_cost, free_hour, get_empty_space_data
+    teachers_empty_space, groups_empty_space, subjects_order = get_empty_space_data(matrix, data)
+    _, _, group_cost = empty_space_groups_cost(groups_empty_space)
+    _, _, teacher_cost = empty_space_teachers_cost(teachers_empty_space)
+    order_score = subjects_order_cost(subjects_order)
+    order_penalty = (100 - order_score) / 10
+    gap_penalty = 1 if free_hour(matrix) == -1 else 0
+    return group_cost + teacher_cost + order_penalty + gap_penalty
 
+#_____________________________________________
+def is_duplicated(matrix, cid):
+    return sum(row.count(cid) for row in matrix) > 0
+
+
+def generate_neighbor(matrix, data, filled):
+    import copy
+    neighbor = copy.deepcopy(matrix)
+    filled_new = copy.deepcopy(filled)
+
+    cls_id = random.choice(list(filled_new.keys()))
+    cls = data.classes[cls_id]
+    old_slots = filled_new[cls_id]
+
+    for r, c in old_slots:
+        neighbor[r][c] = None
+    del filled_new[cls_id]
+
+    for _ in range(50):
+        day = random.randint(0, 5)
+        slot_in_day = random.randint(0, 9 - cls.duration)
+        start = day * 9 + slot_in_day
+        room = random.choice(cls.classrooms)
+
+        valid = True
+        for i in range(cls.duration):
+            r = start + i
+            if neighbor[r][room] is not None:
+                valid = False
+                break
+            for col in range(len(neighbor[0])):
+                other_id = neighbor[r][col]
+                if other_id is None:
+                    continue
+                other = data.classes[other_id]
+                if other.teacher == cls.teacher or any(g in other.groups for g in cls.groups):
+                    valid = False
+                    break
+            if not valid:
+                break
+
+        if valid:
+            new_slots = []
+            for i in range(cls.duration):
+                r = start + i
+                neighbor[r][room] = cls_id
+                new_slots.append((r, room))
+
+            if is_duplicated(neighbor, cls_id):
+                continue
+
+            filled_new[cls_id] = new_slots
+            return neighbor, filled_new
+
+    for r, c in old_slots:
+        neighbor[r][c] = cls_id
+    filled_new[cls_id] = old_slots
+    return matrix, filled
+
+#our work function Abdulmalik and mustfa 
+#------------------------------------------------------------------------------------------------------------------
+def simulated_annealing_final(data, initial_matrix, initial_filled, steps=2000, temp_init=100.0, cooling=0.99):
+    import copy
+    curr_matrix = copy.deepcopy(initial_matrix)
+    curr_filled = copy.deepcopy(initial_filled)
+    curr_cost = cost_function(curr_matrix, data)
+
+    best_matrix = copy.deepcopy(curr_matrix)
+    best_filled = copy.deepcopy(curr_filled)
+    best_cost = curr_cost
+    temp = temp_init
+
+    for step in range(steps):
+        temp *= cooling
+        if temp < 0.01:
+            break
+
+        neighbor_matrix, neighbor_filled = generate_neighbor(curr_matrix, data, curr_filled)
+        new_cost = cost_function(neighbor_matrix, data)
+        delta = new_cost - curr_cost
+
+        if delta < 0 or random.uniform(0, 1) < math.exp(-delta / temp):
+            curr_matrix = neighbor_matrix
+            curr_filled = neighbor_filled
+            curr_cost = new_cost
+
+            if curr_cost < best_cost:
+                best_matrix = copy.deepcopy(curr_matrix)
+                best_filled = copy.deepcopy(curr_filled)
+                best_cost = curr_cost
+
+        if step % 100 == 0:
+            print(f"[{step:4}] Temp: {temp:.4f} | Cost: {curr_cost:.2f} | Best: {best_cost:.2f}")
+
+    return best_matrix, best_filled
+#------------------------------------------------------------------------------------------------------
+
+import time
 
 def main():
-    """
-    free = [(row, column)...] - list of free fields (row, column) in matrix
-    filled: dictionary where key = index of the class, value = list of fields in matrix
-
-    subjects_order: dictionary where key = (name of the subject, index of the group), value = [int, int, int]
-    where ints represent start times (row in matrix) for types of classes P, V and L respectively
-    groups_empty_space: dictionary where key = group index, values = list of rows where it is in
-    teachers_empty_space: dictionary where key = name of the teacher, values = list of rows where it is in
-
-    matrix = columns are classrooms, rows are times, each field has index of the class or it is empty
-    data = input data, contains classes, classrooms, teachers and groups
-    """
     filled = {}
     subjects_order = {}
     groups_empty_space = {}
     teachers_empty_space = {}
     file = 'ulaz1.txt'
 
-    data = load_data('test_files/' + file, teachers_empty_space, groups_empty_space, subjects_order)
+    data = load_txt_data('test_files/' + file, teachers_empty_space, groups_empty_space, subjects_order)
     matrix, free = set_up(len(data.classrooms))
+
+    # المرحلة 1: إنشاء الجدول المبدئي
+    t1 = time.time()
     initial_population(data, matrix, free, filled, groups_empty_space, teachers_empty_space, subjects_order)
+    t2 = time.time()
+    print(f"⏱️ Initial population time: {t2 - t1:.4f} seconds")
+    generate_html_timetable(matrix, data.classrooms, data, output_file='initial_schedule.html')
 
     total, _, _, _, _ = hard_constraints_cost(matrix, data)
     print('Initial cost of hard constraints: {}'.format(total))
 
+    # المرحلة 2: Evolutionary Algorithm
+    t3 = time.time()
     evolutionary_algorithm(matrix, data, free, filled, groups_empty_space, teachers_empty_space, subjects_order)
-    print('STATISTICS')
-    show_statistics(matrix, data, subjects_order, groups_empty_space, teachers_empty_space)
-    simulated_hardening(matrix, data, free, filled, groups_empty_space, teachers_empty_space, subjects_order, file)
+    t4 = time.time()
+    print(f"⏱️ Evolutionary algorithm time: {t4 - t3:.4f} seconds")
+    generate_html_timetable(matrix, data.classrooms, data, output_file='after_evolutionary.html')
 
+    print('STATISTICS AFTER EVOLUTIONARY')
+    show_statistics(matrix, data, subjects_order, groups_empty_space, teachers_empty_space)
+
+    # المرحلة 3: Simulated Annealing
+    t5 = time.time()
+    matrix, filled = simulated_annealing_final(data, matrix, filled)
+    t6 = time.time()
+    print(f"⏱️ Simulated annealing time: {t6 - t5:.4f} seconds")
+
+    generate_html_timetable(matrix, data.classrooms, data, output_file='after_annealing.html')
+
+    print('STATISTICS AFTER ANNEALING')
+    teachers_empty_space, groups_empty_space, subjects_order = get_empty_space_data(matrix, data)
+    show_statistics(matrix, data, subjects_order, groups_empty_space, teachers_empty_space)
+    write_solution_to_file(matrix, data, filled, file, groups_empty_space, teachers_empty_space, subjects_order)
+
+    print(f"✅ Total runtime: {t6 - t1:.4f} seconds")
 
 if __name__ == '__main__':
     main()
+
+
