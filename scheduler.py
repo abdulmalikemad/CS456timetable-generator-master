@@ -13,41 +13,31 @@ def initial_population(data, matrix, free, filled, groups_empty_space, teachers_
     classes = data.classes
 
     for index, classs in classes.items():
-        random.shuffle(free)  # توزيع عادل على كل الأيام
+        random.shuffle(free)  # توزيع عشوائي
 
         for start_field in free:
             start_time = start_field[0]
-            end_time = start_time + int(classs.duration) - 1
+            room = start_field[1]
 
-            # لا تسمح بتجاوز حدود اليوم
-            if start_time % 9 > end_time % 9:
-                continue
-
-            # تحقق أن القاعة من القاعات المسموحة
-            if start_field[1] not in classs.classrooms:
-                continue
-
-            # تحقق أن كل المدة الزمنية متاحة
-            if any((start_time + i, start_field[1]) not in free for i in range(classs.duration)):
-                continue
-
-            # ✅ لو وصلنا هنا، يعني نقدر نحجزها
-            for group_index in classs.groups:
-                insert_order(subjects_order, classs.subject, group_index, classs.type, start_time)
+            # ما فيش أي تحقق — نحجز أول ما نلقى مساحة
+            if all((start_time + i, room) in free for i in range(int(classs.duration))):
+                # حجز الزمن
                 for i in range(int(classs.duration)):
-                    groups_empty_space[group_index].append(i + start_time)
+                    free.remove((start_time + i, room))
+                    filled.setdefault(index, []).append((start_time + i, room))
+                    matrix[start_time + i][room] = index
 
-            for i in range(int(classs.duration)):
-                filled.setdefault(index, []).append((i + start_time, start_field[1]))
-                free.remove((i + start_time, start_field[1]))
-                teachers_empty_space[classs.teacher].append(i + start_time)
+                # تحديث الفجوات والمؤشرات
+                for group_index in classs.groups:
+                    for i in range(int(classs.duration)):
+                        groups_empty_space[group_index].append(start_time + i)
+                    insert_order(subjects_order, classs.subject, group_index, classs.type, start_time)
 
-            break  # خلاص حجزنا، انتقل للكلاس اللي بعده
+                for i in range(int(classs.duration)):
+                    teachers_empty_space[classs.teacher].append(start_time + i)
 
-    # تحديث المصفوفة
-    for index, fields_list in filled.items():
-        for field in fields_list:
-            matrix[field[0]][field[1]] = index
+                break  # انتقل للمادة اللي بعدها
+
 
 
 def insert_order(subjects_order, subject, group, type, start_time):
@@ -415,7 +405,7 @@ def main():
     t1 = time.time()
     initial_population(data, matrix, free, filled, groups_empty_space, teachers_empty_space, subjects_order)
     t2 = time.time()
-    print(f"⏱️ Initial population time: {t2 - t1:.4f} seconds")
+    print(f" Initial population time: {t2 - t1:.4f} seconds")
     generate_html_timetable(matrix, data.classrooms, data, output_file='initial_schedule.html')
 
     total, _, _, _, _ = hard_constraints_cost(matrix, data)
@@ -425,7 +415,7 @@ def main():
     t3 = time.time()
     evolutionary_algorithm(matrix, data, free, filled, groups_empty_space, teachers_empty_space, subjects_order)
     t4 = time.time()
-    print(f"⏱️ Evolutionary algorithm time: {t4 - t3:.4f} seconds")
+    print(f" Evolutionary algorithm time: {t4 - t3:.4f} seconds")
     generate_html_timetable(matrix, data.classrooms, data, output_file='after_evolutionary.html')
 
     print('STATISTICS AFTER EVOLUTIONARY')
